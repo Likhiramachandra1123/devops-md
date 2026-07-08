@@ -1,0 +1,53 @@
+# Suggested seed URLs for the RegView knowledge base.
+# Add / remove as needed, then run:
+#   python -m scripts.ingest_urls --file scripts/seed_urls.txt --source seed
+
+# ============================================================
+# FDA guidance overview pages
+# ============================================================
+https://www.fda.gov/regulatory-information/search-fda-guidance-documents
+https://www.fda.gov/drugs/development-approval-process-drugs
+https://www.fda.gov/drugs/drug-approvals-and-databases/approved-drug-products-therapeutic-equivalence-evaluations-orange-book
+
+# ============================================================
+# openFDA API overview pages
+# ============================================================
+https://open.fda.gov/apis/
+https://open.fda.gov/apis/drug/label/
+https://open.fda.gov/apis/drug/event/
+https://open.fda.gov/apis/drug/ndc/
+https://open.fda.gov/apis/drug/enforcement/
+https://open.fda.gov/apis/device/510k/
+
+# ============================================================
+# openFDA live JSON endpoints (raw data — use the 510k connector for cleaner ingestion)
+# ============================================================
+# The URL loader will grab the first page of JSON as text. For a proper import use:
+#   python -m scripts.ingest_sources --source device-510k --query "insulin pump" --limit 50
+https://api.fda.gov/device/510k.json
+
+# ============================================================
+# ClinicalTrials.gov
+# ============================================================
+# NOTE: for real trial ingestion prefer the connector, which uses the v2 API:
+#   python -m scripts.ingest_sources --source clinicaltrials --query "psoriasis" --limit 30
+https://clinicaltrials.gov/
+https://clinicaltrials.gov/data-api/api
+
+# ============================================================
+# Kaggle dataset landing pages
+# ------------------------------------------------------------
+# IMPORTANT: Kaggle blocks bulk data downloads without login. Ingesting the URLs
+# below will only capture the page DESCRIPTION and column previews — not the CSV
+# rows. For the actual data:
+#   1. Click "Download" on each page.
+#   2. Unzip the CSVs into  data\documents\kaggle\
+#   3. Run:  python -m scripts.ingest_documents --path .\data\documents\kaggle --source kaggle
+# ============================================================
+https://www.kaggle.com/datasets/kanchana1990/global-clinical-trial-intelligence-20242026
+https://www.kaggle.com/datasets/danielansted/clinicaltrials-gov-clinical-trials-dataset
+https://www.kaggle.com/datasets/thedevastator/fda-orange-book-drug-data
+https://www.kaggle.com/datasets/protobioengineering/united-states-fda-drugs-feb-2024
+https://www.kaggle.com/datasets/fda/fda-enforcement-actions
+https://www.kaggle.com/datasets/waszabbyryugami/fda-medical-device-with-de-novo-certification
+
