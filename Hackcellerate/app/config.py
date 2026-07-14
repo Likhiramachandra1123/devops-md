@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     # at least this close or we abstain. Lower = stricter. 0 disables the check.
     rag_top_distance_floor: float = Field(0.45, alias="RAG_TOP_DISTANCE_FLOOR")
     rag_strict: bool = Field(True, alias="RAG_STRICT")
+    # When True (default), a question that is IN SCOPE for the knowledge base
+    # topic (regulatory / drugs / devices / clinical trials / MedDRA) but whose
+    # answer isn't found in ChromaDB is answered from Claude's general knowledge
+    # with a clearly-labelled warning banner, instead of a hard refusal. Genuine
+    # off-topic questions (sports, trivia, coding) are still refused.
+    rag_allow_general_fallback: bool = Field(True, alias="RAG_ALLOW_GENERAL_FALLBACK")
 
     # Memory
     session_db_url: str = Field("sqlite+aiosqlite:///./data/sessions.db", alias="SESSION_DB_URL")

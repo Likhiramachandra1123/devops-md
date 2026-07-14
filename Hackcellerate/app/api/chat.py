@@ -13,6 +13,8 @@ from app.core.embeddings import get_embedding_model
 from app.core.memory import build_history_messages
 from app.core.prompts import (
     FOLLOWUP_CONTEXT_BLOCK,
+    GENERAL_KNOWLEDGE_BANNER,
+    GENERAL_KNOWLEDGE_SYSTEM_PROMPT,
     OUT_OF_SCOPE_REFUSAL,
     SYSTEM_PROMPT,
     build_context_block,
@@ -371,13 +373,63 @@ async def chat(req: ChatRequest) -> ChatResponse:
             chunks = []
             grounded = False
 
-    # Strict RAG: if we searched the KB and found nothing relevant, abstain
-    # instead of letting Claude answer from general knowledge.
+    # Strict RAG: if we searched the KB and found nothing relevant, either
+    # gracefully fall back to Claude's general knowledge (with a warning
+    # banner + off-topic refusal built into the prompt) or, if the fallback
+    # flag is off, abstain hard.
     # EXCEPTION: if this session already had a grounded turn, the user is
     # almost certainly digging into the previous answer ("why?", "elaborate",
     # "which one?"). Let it through so Claude can respond using the prior
     # Q&A that's still in its history.
     if req.use_rag and not grounded and s.rag_strict and not has_prior_turn:
+        if s.rag_allow_general_fallback and s.anthropic_api_key:
+            logger.info(
+                "No relevant KB chunks; using GENERAL_KNOWLEDGE_SYSTEM_PROMPT fallback."
+            )
+            # Fresh single-turn call — do NOT pass conversation history here, so
+            # Claude judges scope solely on the current question. If it decides
+            # the question is out of domain, it will emit the canonical refusal
+            # per rule 1 of the fallback prompt; otherwise it emits the banner
+            # + a general-knowledge answer.
+            claude = get_claude_client()
+            try:
+                gk_result = claude.complete(
+                    system=GENERAL_KNOWLEDGE_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": req.message}],
+                    model=req.model,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.exception("General-knowledge fallback failed")
+                raise HTTPException(502, f"Claude API error: {e}") from e
+
+            gk_answer = gk_result["text"].strip()
+            refused = OUT_OF_SCOPE_REFUSAL.lower()[:60] in gk_answer.lower()
+            # Belt-and-braces: if the model produced a non-refusal answer but
+            # forgot the banner, prepend it so the UI can always distinguish
+            # fallback answers from KB-grounded ones.
+            if not refused and GENERAL_KNOWLEDGE_BANNER not in gk_answer:
+                gk_answer = f"{GENERAL_KNOWLEDGE_BANNER}\n\n{gk_answer}"
+
+            await store.add_message(session_id, "user", req.message)
+            await store.add_message(session_id, "assistant", gk_answer)
+            return ChatResponse(
+                session_id=session_id,
+                answer=gk_answer,
+                summary=_extract_summary(gk_answer),
+                citations=[],
+                used_rag=True,
+                grounded=False,
+                source_type="none" if refused else "general_knowledge",
+                source_info={
+                    "reason": "off_topic_refusal" if refused
+                    else "general_knowledge_fallback",
+                    "threshold": s.rag_distance_threshold,
+                },
+                model=gk_result["model"],
+                usage=gk_result["usage"],
+            )
+
+        # Fallback disabled (or no API key): the original hard abstention.
         answer = (
             "I couldn't find any relevant information in the internal knowledge base "
             f"for your question. (Retrieval threshold: distance ≤ {s.rag_distance_threshold:.2f}; "
@@ -458,35 +510,46 @@ async def chat(req: ChatRequest) -> ChatResponse:
     # Post-response guardrails to catch models that ignore the strict SYSTEM_PROMPT
     # and answer off-topic questions from pretraining knowledge.
     #
-    # Under the new response format, a valid grounded answer must end with a
-    # "Sources" section listing at least one dataset title or URL. We accept
-    # either an explicit "Sources:" heading, or the presence of a real URL
-    # from the retrieved chunks appearing in the answer.
-    _SOURCES_HEADER_PAT = re.compile(r"(?im)^\s*\**\s*sources?\s*:?\s*\**\s*$")
+    # Be permissive: many datasets have no `url` in metadata, and models cite
+    # inline / with slightly different heading formats. We treat the answer as
+    # legitimately attributed if ANY of the following hold:
+    #   - it contains a "Source(s)" heading or mention anywhere
+    #   - it contains any URL
+    #   - it references a chunk title or doc_id we retrieved
+    # Only if none of these are present AND the model didn't refuse do we
+    # override to a refusal. This keeps the guard useful without punishing
+    # minor format deviations.
     _URL_PAT = re.compile(r"https?://\S+")
+    _SOURCE_WORD_PAT = re.compile(r"\bsources?\b", re.IGNORECASE)
     refused_by_model = OUT_OF_SCOPE_REFUSAL.lower()[:60] in answer.lower()
-    has_sources_section = bool(_SOURCES_HEADER_PAT.search(answer))
-    answer_urls = {u.rstrip(").,;") for u in _URL_PAT.findall(answer)}
-    chunk_urls = {
-        str((c.metadata or {}).get("url") or "").rstrip("/")
+    answer_lower = answer.lower()
+    has_source_mention = bool(_SOURCE_WORD_PAT.search(answer))
+    has_url = bool(_URL_PAT.search(answer))
+    chunk_titles = [
+        str((c.metadata or {}).get("title") or "").strip().lower()
         for c in chunks
-        if (c.metadata or {}).get("url")
-    }
-    echoes_chunk_url = any(u.rstrip("/") in chunk_urls for u in answer_urls)
-    has_attribution = has_sources_section or echoes_chunk_url
+    ]
+    chunk_titles = [t for t in chunk_titles if len(t) >= 5]
+    chunk_doc_ids = [
+        str((c.metadata or {}).get("doc_id") or "").strip().lower()
+        for c in chunks
+    ]
+    chunk_doc_ids = [d for d in chunk_doc_ids if d]
+    echoes_chunk = any(t in answer_lower for t in chunk_titles) or any(
+        d in answer_lower for d in chunk_doc_ids
+    )
+    has_attribution = has_source_mention or has_url or echoes_chunk
 
-    # Case A: model explicitly refused (matches our canned refusal). Honour it.
+    # Case A: model explicitly refused. Honour it.
     fell_back = refused_by_model
     # Case B: model was given fresh context (grounded=True) or is reusing prior
-    # context on a follow-up, but produced no Sources section and no URL from
-    # the retrieved snippets — that violates the response-format rules and
-    # almost always means the model drifted into general knowledge. Force a
-    # refusal.
+    # context on a follow-up, but produced no source-like attribution at all.
+    # That is strong evidence of general-knowledge drift; override to refusal.
     must_cite = grounded or is_followup_reuse
     drifted = must_cite and not has_attribution and not refused_by_model
     if drifted:
         logger.warning(
-            f"Model {result.get('model')} returned an answer with no Sources section "
+            f"Model {result.get('model')} returned an answer with no source attribution "
             f"(grounded={grounded}, followup={is_followup_reuse}) — overriding "
             f"with refusal. First 120 chars: {answer[:120]!r}"
         )
