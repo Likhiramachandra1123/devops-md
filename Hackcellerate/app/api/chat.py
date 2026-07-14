@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from loguru import logger
@@ -549,18 +549,11 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
     answer = result["text"].strip()
 
-    # Post-response guardrails to catch models that ignore the strict SYSTEM_PROMPT
-    # and answer off-topic questions from pretraining knowledge.
-    #
-    # Be permissive: many datasets have no `url` in metadata, and models cite
-    # inline / with slightly different heading formats. We treat the answer as
-    # legitimately attributed if ANY of the following hold:
-    #   - it contains a "Source(s)" heading or mention anywhere
-    #   - it contains any URL
-    #   - it references a chunk title or doc_id we retrieved
-    # Only if none of these are present AND the model didn't refuse do we
-    # override to a refusal. This keeps the guard useful without punishing
-    # minor format deviations.
+    # Post-response bookkeeping. We used to force a refusal when a grounded
+    # answer had no source-like attribution, but that turned out to over-fire
+    # and hide legitimate answers. Now we only LOG the anomaly and mark
+    # `source_info.unverified=true` so the UI can show a soft indicator if
+    # desired. The user still sees the model's answer.
     _URL_PAT = re.compile(r"https?://\S+")
     _SOURCE_WORD_PAT = re.compile(r"\bsources?\b", re.IGNORECASE)
     refused_by_model = OUT_OF_SCOPE_REFUSAL.lower()[:60] in answer.lower()
@@ -582,37 +575,35 @@ async def chat(req: ChatRequest) -> ChatResponse:
     )
     has_attribution = has_source_mention or has_url or echoes_chunk
 
-    # Case A: model explicitly refused. Honour it.
     fell_back = refused_by_model
-    # Case B: model was given fresh context (grounded=True) or is reusing prior
-    # context on a follow-up, but produced no source-like attribution at all.
-    # That is strong evidence of general-knowledge drift; override to refusal.
     must_cite = grounded or is_followup_reuse
-    drifted = must_cite and not has_attribution and not refused_by_model
-    if drifted:
-        logger.warning(
-            f"Model {result.get('model')} returned an answer with no source attribution "
-            f"(grounded={grounded}, followup={is_followup_reuse}) — overriding "
-            f"with refusal. First 120 chars: {answer[:120]!r}"
+    unverified = must_cite and not has_attribution and not refused_by_model
+    if unverified:
+        logger.info(
+            f"Model {result.get('model')} returned an answer with no obvious source "
+            f"attribution (grounded={grounded}, followup={is_followup_reuse}). "
+            f"Allowing the response through and flagging unverified."
         )
-        answer = OUT_OF_SCOPE_REFUSAL
-        fell_back = True
 
     if grounded and fell_back:
         grounded = False
         citations: List[Citation] = []
-        source_type = "general_knowledge" if not drifted else "none"
-        source_info = {"reason": "model_drift"} if drifted else {}
+        source_type = "general_knowledge"
+        source_info: Dict[str, Any] = {}
     elif grounded:
         citations = _to_citations(chunks)
         source_type = "knowledge_base"
         source_info = {"citation_count": len(citations)}
+        if unverified:
+            source_info["unverified"] = True
     elif is_followup_reuse and not fell_back:
         # Follow-up answered from prior turn's context. We don't have fresh
         # chunks to attach, but the response is legitimate.
         citations = []
         source_type = "knowledge_base"
         source_info = {"reason": "followup_reuse"}
+        if unverified:
+            source_info["unverified"] = True
         grounded = True
     else:
         citations = []

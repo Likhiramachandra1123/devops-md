@@ -34,10 +34,11 @@ class Settings(BaseSettings):
     chunk_overlap: int = Field(120, alias="CHUNK_OVERLAP")
     rag_top_k: int = Field(5, alias="RAG_TOP_K")
     rag_final_k: int = Field(3, alias="RAG_FINAL_K")
-    rag_distance_threshold: float = Field(0.55, alias="RAG_DISTANCE_THRESHOLD")
+    rag_distance_threshold: float = Field(0.65, alias="RAG_DISTANCE_THRESHOLD")
     # Extra safety net: even if chunks pass the threshold, the TOP-1 chunk must be
     # at least this close or we abstain. Lower = stricter. 0 disables the check.
-    rag_top_distance_floor: float = Field(0.45, alias="RAG_TOP_DISTANCE_FLOOR")
+    # Disabled by default — set >0 in .env only if you want the extra floor.
+    rag_top_distance_floor: float = Field(0.0, alias="RAG_TOP_DISTANCE_FLOOR")
     rag_strict: bool = Field(True, alias="RAG_STRICT")
     # When True (default), a question that is IN SCOPE for the knowledge base
     # topic (regulatory / drugs / devices / clinical trials / MedDRA) but whose
