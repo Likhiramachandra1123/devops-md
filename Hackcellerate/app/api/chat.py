@@ -13,6 +13,7 @@ from app.core.embeddings import get_embedding_model
 from app.core.memory import build_history_messages
 from app.core.prompts import (
     FOLLOWUP_CONTEXT_BLOCK,
+    FOLLOWUP_SYSTEM_PROMPT,
     GENERAL_KNOWLEDGE_BANNER,
     GENERAL_KNOWLEDGE_SYSTEM_PROMPT,
     OUT_OF_SCOPE_REFUSAL,
@@ -298,6 +299,31 @@ _FOLLOWUP_CUE_PAT = re.compile(
     re.IGNORECASE,
 )
 
+# List-style intent: "give me X", "list Y", "show all Z", "which are the ...",
+# or any question that mentions a plural domain noun (trials, drugs, devices,
+# approvals, applications, recalls, patents, submissions, studies, records,
+# manufacturers, sponsors, indications, ingredients, terms). For these queries
+# the user wants BREADTH — many distinct documents — not depth on one.
+_LIST_INTENT_PAT = re.compile(
+    r"(\b(list|show|give|display|find|fetch|get|enumerate|name)\s+"
+    r"(me\s+|us\s+)?(some|all|any|every|the|top|first|\d+)?\s*"
+    r"\w*\s*(trial|drug|device|approval|application|recall|patent|submission|"
+    r"study|record|manufacturer|sponsor|indication|ingredient|term|adverse|"
+    r"event|product|company|classification|enforcement|label|de\s*novo|"
+    r"510\s*\(?k\)?|nda|anda|orange\s*book|meddra)s?\b)"
+    r"|(\bwhich\s+(are|is)\s+the\b)"
+    r"|(\bhow\s+many\b)"
+    r"|(\btrials?|drugs?|devices?|approvals?|applications?|recalls?|patents?|"
+    r"submissions?|studies|manufacturers?|sponsors?|indications?|ingredients?|"
+    r"products?)\s+(related to|for|about|involving|regarding|on)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_list_intent(message: str) -> bool:
+    """Return True when the user is asking for a list / breadth of records."""
+    return bool(_LIST_INTENT_PAT.search(message))
+
 
 def _build_retrieval_query(current: str, history: List[dict]) -> str:
     """Combine the current user message with recent turns so that follow-up
@@ -351,11 +377,23 @@ async def chat(req: ChatRequest) -> ChatResponse:
     chunks: List[RetrievedChunk] = []
     grounded = False
     if req.use_rag:
+        # For list-style questions ("give clinical trials related to cancer",
+        # "list all recalls for Bayer") pull a lot more chunks and de-duplicate
+        # by document so the user sees many distinct records instead of a few
+        # near-identical chunks of the same doc.
+        list_intent = _is_list_intent(req.message)
+        if list_intent:
+            eff_top_k = req.top_k or max(s.rag_top_k * 6, 30)
+            eff_final_k = max(s.rag_final_k * 5, 15)
+        else:
+            eff_top_k = req.top_k or s.rag_top_k
+            eff_final_k = s.rag_final_k
         chunks = retrieve(
             retrieval_query,
-            top_k=req.top_k or s.rag_top_k,
-            final_k=s.rag_final_k,
+            top_k=eff_top_k,
+            final_k=eff_final_k,
             where=req.filters,
+            unique_docs=list_intent,
         )
         grounded = len(chunks) > 0
         # Extra safety net: reject "chunks passed the threshold but the top one is
@@ -499,8 +537,12 @@ async def chat(req: ChatRequest) -> ChatResponse:
         )
 
     claude = get_claude_client()
+    # For follow-up drilling turns (no new chunks, but prior turns had chunks
+    # in history), swap in the FOLLOWUP_SYSTEM_PROMPT which permits comparison,
+    # ranking, and other reasoning across the items already listed earlier.
+    active_system_prompt = FOLLOWUP_SYSTEM_PROMPT if is_followup_reuse else SYSTEM_PROMPT
     try:
-        result = claude.complete(system=SYSTEM_PROMPT, messages=history, model=req.model)
+        result = claude.complete(system=active_system_prompt, messages=history, model=req.model)
     except Exception as e:  # noqa: BLE001
         logger.exception("Claude call failed")
         raise HTTPException(502, f"Claude API error: {e}") from e
