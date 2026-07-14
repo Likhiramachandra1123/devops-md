@@ -4,11 +4,15 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any, Dict, List
 
-from anthropic import Anthropic, APIError
+from anthropic import Anthropic, APIError, BadRequestError
 from loguru import logger
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.config import get_settings
+
+# Substrings we look for in the API error message to detect that the model
+# rejected the sampling params (e.g. Claude 4 with extended thinking).
+_UNSUPPORTED_SAMPLING_HINTS = ("temperature", "top_p", "top_k")
 
 
 class ClaudeClient:
@@ -17,6 +21,9 @@ class ClaudeClient:
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
+        # Models observed to reject sampling params. Populated at runtime so we
+        # skip those params on subsequent calls to the same model.
+        self._no_sampling_models: set[str] = set()
 
     @retry(
         reraise=True,
@@ -34,13 +41,34 @@ class ClaudeClient:
     ) -> Dict[str, Any]:
         """Non-streaming completion. `messages` = list of {role, content} in Anthropic format."""
         used_model = model or self.model
-        resp = self.client.messages.create(
-            model=used_model,
-            system=system,
-            messages=messages,
-            max_tokens=max_tokens or self.max_tokens,
-            temperature=self.temperature if temperature is None else temperature,
-        )
+        effective_temp = self.temperature if temperature is None else temperature
+
+        kwargs: Dict[str, Any] = {
+            "model": used_model,
+            "system": system,
+            "messages": messages,
+            "max_tokens": max_tokens or self.max_tokens,
+        }
+        if used_model not in self._no_sampling_models:
+            kwargs["temperature"] = effective_temp
+
+        try:
+            resp = self.client.messages.create(**kwargs)
+        except BadRequestError as e:
+            msg = str(e).lower()
+            if any(hint in msg for hint in _UNSUPPORTED_SAMPLING_HINTS) and "temperature" in kwargs:
+                logger.warning(
+                    f"Model {used_model} rejected sampling params ({e}); "
+                    f"retrying without temperature and caching for future calls."
+                )
+                self._no_sampling_models.add(used_model)
+                kwargs.pop("temperature", None)
+                kwargs.pop("top_p", None)
+                kwargs.pop("top_k", None)
+                resp = self.client.messages.create(**kwargs)
+            else:
+                raise
+
         text = "".join(block.text for block in resp.content if getattr(block, "type", "") == "text")
         usage = {
             "input_tokens": getattr(resp.usage, "input_tokens", 0),

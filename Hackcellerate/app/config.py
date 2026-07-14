@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     rag_top_k: int = Field(5, alias="RAG_TOP_K")
     rag_final_k: int = Field(3, alias="RAG_FINAL_K")
     rag_distance_threshold: float = Field(0.55, alias="RAG_DISTANCE_THRESHOLD")
+    # Extra safety net: even if chunks pass the threshold, the TOP-1 chunk must be
+    # at least this close or we abstain. Lower = stricter. 0 disables the check.
+    rag_top_distance_floor: float = Field(0.45, alias="RAG_TOP_DISTANCE_FLOOR")
     rag_strict: bool = Field(True, alias="RAG_STRICT")
 
     # Memory

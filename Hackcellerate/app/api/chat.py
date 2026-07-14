@@ -238,6 +238,20 @@ async def chat(req: ChatRequest) -> ChatResponse:
             where=req.filters,
         )
         grounded = len(chunks) > 0
+        # Extra safety net: reject "chunks passed the threshold but the top one is
+        # not actually close" — happens when a small KB returns everything as
+        # marginally-relevant to an out-of-scope question.
+        if (
+            grounded
+            and s.rag_top_distance_floor > 0
+            and chunks[0].distance > s.rag_top_distance_floor
+        ):
+            logger.info(
+                f"Top chunk distance {chunks[0].distance:.3f} exceeds strict floor "
+                f"{s.rag_top_distance_floor:.3f} — treating as ungrounded."
+            )
+            chunks = []
+            grounded = False
 
     # Strict RAG: if we searched the KB and found nothing relevant, abstain
     # instead of letting Claude answer from general knowledge.
