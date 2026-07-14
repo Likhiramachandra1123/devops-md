@@ -557,6 +557,57 @@ async def chat(req: ChatRequest) -> ChatResponse:
     _URL_PAT = re.compile(r"https?://\S+")
     _SOURCE_WORD_PAT = re.compile(r"\bsources?\b", re.IGNORECASE)
     refused_by_model = OUT_OF_SCOPE_REFUSAL.lower()[:60] in answer.lower()
+
+    # Retry with the general-knowledge fallback when the KB answer was a
+    # refusal but the question is still plausibly in-domain (e.g. we retrieved
+    # chunks for "cancer" and "endoscopy" but none actually contrasted them,
+    # so the strict SYSTEM_PROMPT triggered a refusal). Skip the retry for
+    # follow-up reuse turns — those are handled by FOLLOWUP_SYSTEM_PROMPT and
+    # shouldn't drop back to general knowledge.
+    if (
+        refused_by_model
+        and not is_followup_reuse
+        and req.use_rag
+        and s.rag_allow_general_fallback
+        and s.anthropic_api_key
+    ):
+        logger.info(
+            "KB call refused; retrying with GENERAL_KNOWLEDGE_SYSTEM_PROMPT fallback."
+        )
+        try:
+            gk_retry = claude.complete(
+                system=GENERAL_KNOWLEDGE_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": req.message}],
+                model=req.model,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.exception("General-knowledge retry failed")
+            raise HTTPException(502, f"Claude API error: {e}") from e
+
+        gk_answer = gk_retry["text"].strip()
+        gk_refused = OUT_OF_SCOPE_REFUSAL.lower()[:60] in gk_answer.lower()
+        if not gk_refused and GENERAL_KNOWLEDGE_BANNER not in gk_answer:
+            gk_answer = f"{GENERAL_KNOWLEDGE_BANNER}\n\n{gk_answer}"
+
+        await store.add_message(session_id, "user", req.message)
+        await store.add_message(session_id, "assistant", gk_answer)
+        return ChatResponse(
+            session_id=session_id,
+            answer=gk_answer,
+            summary=_extract_summary(gk_answer),
+            citations=[],
+            used_rag=True,
+            grounded=False,
+            source_type="none" if gk_refused else "general_knowledge",
+            source_info={
+                "reason": "off_topic_refusal" if gk_refused
+                else "general_knowledge_retry_after_kb_refusal",
+                "threshold": s.rag_distance_threshold,
+            },
+            model=gk_retry["model"],
+            usage=gk_retry["usage"],
+        )
+
     answer_lower = answer.lower()
     has_source_mention = bool(_SOURCE_WORD_PAT.search(answer))
     has_url = bool(_URL_PAT.search(answer))
