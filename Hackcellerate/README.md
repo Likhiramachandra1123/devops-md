@@ -286,6 +286,58 @@ Invoke-RestMethod http://localhost:8000/ingest/url -Method Post `
   -Body '{"url":"https://example.com/some-article"}'
 ```
 
+### 6d. One-shot: URLs + local docs + FDA / ClinicalTrials connectors
+
+`scripts/ingest_all.py` is the fastest way to seed a demo knowledge base. It calls, in order:
+
+1. Every URL in the seed file (`scripts/seed_urls.txt` by default).
+2. Every supported file (`.pdf`, `.docx`, `.txt`, `.md`, `.html`) under a docs folder (`data/documents/` by default).
+3. Per drug in `--drugs`: openFDA drug labels, FAERS adverse events, Orange Book patents/exclusivity, drug enforcement actions.
+4. Per condition in `--conditions`: ClinicalTrials.gov studies.
+5. Per device term in `--devices`: 510(k) records and device enforcement actions.
+
+Failures in one connector never abort the run — each source is logged and the pipeline moves on.
+
+**PowerShell — defaults**
+```powershell
+cd C:\Users\LikhithR\Documents\Hackcellerate
+.\.venv\Scripts\Activate.ps1
+python -m scripts.ingest_all
+```
+
+**PowerShell — custom terms**
+```powershell
+python -m scripts.ingest_all `
+  --urls scripts\seed_urls.txt `
+  --docs .\data\documents `
+  --drugs "atorvastatin,metformin,ibuprofen" `
+  --conditions "hypertension,type 2 diabetes" `
+  --devices "insulin pump,pacemaker" `
+  --limit 25
+```
+
+**CMD**
+```cmd
+python -m scripts.ingest_all ^
+  --drugs "atorvastatin,metformin,ibuprofen" ^
+  --conditions "hypertension,type 2 diabetes" ^
+  --devices "insulin pump,pacemaker" ^
+  --limit 25
+```
+
+#### Script flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--urls` | `scripts/seed_urls.txt` | Seed URL file (one URL per line, `#` starts a comment). Pass an empty string to skip. |
+| `--docs` | `data/documents` | Folder to bulk-ingest local files from. Pass an empty string to skip. |
+| `--drugs` | `atorvastatin,metformin,ibuprofen` | Comma-separated drug names for labels / FAERS / Orange Book / drug enforcement. |
+| `--conditions` | `hypercholesterolemia,type 2 diabetes,hypertension` | Comma-separated conditions for ClinicalTrials.gov. |
+| `--devices` | `insulin pump,pacemaker` | Comma-separated device terms for 510(k) and device enforcement. |
+| `--limit` | `25` | Per-connector record cap (FAERS uses `limit × 2`). |
+
+The backend does **not** need to be running for this script — it writes directly to the local ChromaDB and session store. Only an outbound internet connection to `api.fda.gov`, `clinicaltrials.gov`, and (for URL ingest) the seed sites is required.
+
 ### API examples (Mongo and S3)
 
 Both hit `POST /ingest/source` — the same endpoint the MySQL script uses.
