@@ -194,12 +194,60 @@ const ALL = "__all__";
                 <tr class="bg-ink-50/40">
                   <td></td>
                   <td colspan="6" class="px-3 pb-4 pt-1 text-xs text-ink-700">
-                    <div class="rounded-md border border-ink-100 bg-white p-3 shadow-sm">
-                      <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-500">Snippet</div>
-                      <p class="whitespace-pre-wrap leading-relaxed text-ink-700">{{ r.snippet }}</p>
-                      @if (r.doc_id) {
-                        <div class="mt-2 text-[11px] text-ink-400 font-mono">doc_id: {{ r.doc_id }}</div>
+                    <div class="space-y-3 rounded-md border border-ink-100 bg-white p-4 shadow-sm">
+                      <!-- Header row: title + open link -->
+                      <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                          <div class="text-sm font-semibold text-ink-800 break-words">{{ r.title }}</div>
+                          <div class="mt-0.5 text-[11px] text-ink-500">
+                            <span class="font-medium text-ink-700">{{ r.source }}</span>
+                            @if (typeOf(r); as t) {
+                              <span class="text-ink-400"> · </span>
+                              <span>{{ t }}</span>
+                            }
+                            <span class="text-ink-400"> · </span>
+                            <span class="font-mono">score {{ r.score.toFixed(2) }}</span>
+                          </div>
+                        </div>
+                        @if (r.url) {
+                          <a
+                            [href]="r.url"
+                            target="_blank"
+                            rel="noopener"
+                            class="inline-flex shrink-0 items-center gap-1 text-brand-600 hover:text-brand-700"
+                          >
+                            Open source <lucide-icon [img]="ExternalLink" class="h-3 w-3"></lucide-icon>
+                          </a>
+                        }
+                      </div>
+
+                      <!-- Metadata grid (only shows keys that are present + meaningful) -->
+                      @if (metaEntries(r).length > 0) {
+                        <div class="grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                          @for (kv of metaEntries(r); track kv.key) {
+                            <div class="flex flex-col">
+                              <span class="text-[10px] font-semibold uppercase tracking-wide text-ink-400">{{ kv.label }}</span>
+                              <span class="text-[12px] text-ink-700 break-words">{{ kv.value }}</span>
+                            </div>
+                          }
+                        </div>
                       }
+
+                      <!-- Full text -->
+                      <div>
+                        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-500">Excerpt</div>
+                        <p class="whitespace-pre-wrap break-words leading-relaxed text-[13px] text-ink-700">{{ r.text || r.snippet }}</p>
+                      </div>
+
+                      <!-- IDs footer -->
+                      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-ink-100 pt-2 text-[10px] font-mono text-ink-400">
+                        @if (r.doc_id) {
+                          <span>doc_id: {{ r.doc_id }}</span>
+                        }
+                        @if (r.chunk_id) {
+                          <span>chunk_id: {{ r.chunk_id }}</span>
+                        }
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -436,5 +484,76 @@ export class ResultsTableComponent {
   protected dateOf(r: SearchResult): string {
     const meta = r.metadata ?? {};
     return String(meta["publication_date"] ?? meta["date"] ?? meta["year"] ?? "—");
+  }
+
+  protected typeOf(r: SearchResult): string {
+    const meta = r.metadata ?? {};
+    const t = (meta["doc_type"] ?? "") as string;
+    if (!t) return "";
+    return t.replace(/_/g, " ");
+  }
+
+  /**
+   * Curated set of metadata keys to surface in the expanded row, in display order.
+   * Keys not present in `r.metadata` are silently skipped. Values that look like
+   * arrays get joined; empty / trivial values ("unknown", "N/A", "") are dropped.
+   */
+  private static readonly META_FIELDS: { key: string; label: string }[] = [
+    { key: "manufacturer", label: "Manufacturer" },
+    { key: "applicant", label: "Applicant" },
+    { key: "sponsor", label: "Sponsor" },
+    { key: "device_classification", label: "Device Classification" },
+    { key: "review_advisory_committee", label: "Advisory Committee" },
+    { key: "de_novo_number", label: "De Novo Number" },
+    { key: "appl_no", label: "Application No." },
+    { key: "product_no", label: "Product No." },
+    { key: "nct_id", label: "NCT ID" },
+    { key: "trial_id", label: "Trial ID" },
+    { key: "phase", label: "Phase" },
+    { key: "status", label: "Status" },
+    { key: "trade_name", label: "Trade Name" },
+    { key: "ingredient", label: "Ingredient" },
+    { key: "strength", label: "Strength" },
+    { key: "route", label: "Route / Dosage Form" },
+    { key: "df_route", label: "Route / Dosage Form" },
+    { key: "appl_type", label: "Application Type" },
+    { key: "te_code", label: "TE Code" },
+    { key: "exclusivity_code", label: "Exclusivity" },
+    { key: "patent_no", label: "Patent No." },
+    { key: "patent_expire_date", label: "Patent Expiry" },
+    { key: "delist_flag", label: "Delisted" },
+    { key: "date_received", label: "Date Received" },
+    { key: "decision_date", label: "Decision Date" },
+    { key: "time_to_certify_days", label: "Days to Certify" },
+    { key: "condition", label: "Condition" },
+    { key: "intervention", label: "Intervention" },
+    { key: "country", label: "Country" },
+    { key: "continent", label: "Continent" },
+    { key: "publication_date", label: "Published" },
+    { key: "tags", label: "Tags" },
+  ];
+
+  protected metaEntries(r: SearchResult): { key: string; label: string; value: string }[] {
+    const meta = (r.metadata ?? {}) as Record<string, unknown>;
+    const out: { key: string; label: string; value: string }[] = [];
+    const seenLabels = new Set<string>();
+    for (const f of ResultsTableComponent.META_FIELDS) {
+      if (seenLabels.has(f.label)) continue;
+      const raw = meta[f.key];
+      if (raw === undefined || raw === null) continue;
+      let val: string;
+      if (Array.isArray(raw)) {
+        val = raw.filter((x) => x !== null && x !== undefined && `${x}`.trim() !== "").join(", ");
+      } else if (typeof raw === "boolean") {
+        val = raw ? "Yes" : "No";
+      } else {
+        val = String(raw);
+      }
+      val = val.trim();
+      if (!val || /^(unknown|n\/a|none|null)$/i.test(val)) continue;
+      out.push({ key: f.key, label: f.label, value: val });
+      seenLabels.add(f.label);
+    }
+    return out;
   }
 }

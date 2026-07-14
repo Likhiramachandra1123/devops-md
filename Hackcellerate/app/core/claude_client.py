@@ -1,6 +1,7 @@
 """Anthropic Claude client wrapper — direct API, conversational."""
 from __future__ import annotations
 
+import warnings
 from functools import lru_cache
 from typing import Any, Dict, List
 
@@ -10,9 +11,31 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from app.config import get_settings
 
+# Silence the SDK-level DeprecationWarning some newer Claude models emit for
+# `temperature`/`top_p`/`top_k`. We already handle the actual API rejection
+# below; the warning itself is noise in the logs.
+warnings.filterwarnings(
+    "ignore",
+    message=r".*(temperature|top_p|top_k).*deprecated.*",
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r".*(temperature|top_p|top_k).*deprecated.*",
+    category=UserWarning,
+)
+
 # Substrings we look for in the API error message to detect that the model
-# rejected the sampling params (e.g. Claude 4 with extended thinking).
-_UNSUPPORTED_SAMPLING_HINTS = ("temperature", "top_p", "top_k")
+# rejected the sampling params (e.g. Claude 4 with extended thinking, or
+# newer models where `temperature` is no longer accepted).
+_UNSUPPORTED_SAMPLING_HINTS = (
+    "temperature",
+    "top_p",
+    "top_k",
+    "deprecated",
+    "sampling",
+    "extended thinking",
+)
 
 
 class ClaudeClient:
@@ -53,13 +76,28 @@ class ClaudeClient:
             kwargs["temperature"] = effective_temp
 
         try:
-            resp = self.client.messages.create(**kwargs)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                resp = self.client.messages.create(**kwargs)
+            for w in caught:
+                wmsg = str(w.message).lower()
+                if "deprecated" in wmsg and any(
+                    p in wmsg for p in ("temperature", "top_p", "top_k")
+                ):
+                    if used_model not in self._no_sampling_models:
+                        logger.warning(
+                            f"Model {used_model} emitted deprecation warning for sampling "
+                            f"params ({w.message}); dropping them on future calls."
+                        )
+                        self._no_sampling_models.add(used_model)
         except BadRequestError as e:
             msg = str(e).lower()
-            if any(hint in msg for hint in _UNSUPPORTED_SAMPLING_HINTS) and "temperature" in kwargs:
+            if any(hint in msg for hint in _UNSUPPORTED_SAMPLING_HINTS) and (
+                "temperature" in kwargs or "top_p" in kwargs or "top_k" in kwargs
+            ):
                 logger.warning(
                     f"Model {used_model} rejected sampling params ({e}); "
-                    f"retrying without temperature and caching for future calls."
+                    f"retrying without them and caching for future calls."
                 )
                 self._no_sampling_models.add(used_model)
                 kwargs.pop("temperature", None)

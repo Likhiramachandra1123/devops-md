@@ -60,6 +60,7 @@ class SearchResult(BaseModel):
     distance: float
     score: float = Field(..., description="Convenience: 1 - distance, clipped to [0, 1].")
     snippet: str
+    text: str = Field("", description="Full chunk text (used for the expanded-row view).")
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

@@ -38,6 +38,7 @@ export interface SearchResult {
   distance: number;
   score: number;
   snippet: string;
+  text?: string;
   metadata: Record<string, unknown>;
 }
 

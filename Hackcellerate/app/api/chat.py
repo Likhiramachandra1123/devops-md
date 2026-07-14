@@ -11,7 +11,13 @@ from app.config import get_settings
 from app.core.claude_client import get_claude_client
 from app.core.embeddings import get_embedding_model
 from app.core.memory import build_history_messages
-from app.core.prompts import SYSTEM_PROMPT, build_context_block, build_user_turn
+from app.core.prompts import (
+    FOLLOWUP_CONTEXT_BLOCK,
+    OUT_OF_SCOPE_REFUSAL,
+    SYSTEM_PROMPT,
+    build_context_block,
+    build_user_turn,
+)
 from app.core.retriever import RetrievedChunk, retrieve
 from app.db.session_store import get_session_store
 from app.ingestion.chunker import chunk_text
@@ -110,9 +116,13 @@ def _to_search_results(chunks: List[RetrievedChunk]) -> List[SearchResult]:
     out: List[SearchResult] = []
     for i, c in enumerate(chunks, start=1):
         meta = c.metadata or {}
-        snippet = c.text.strip().replace("\n", " ")
-        if len(snippet) > 500:
-            snippet = snippet[:500] + "…"
+        # Preserve paragraph breaks in the full text — the table's expanded
+        # row renders it with `whitespace-pre-wrap`, so readable spacing helps.
+        full_text = c.text.strip()
+        # Short preview for the collapsed row (single line, no newlines).
+        snippet = full_text.replace("\n", " ")
+        if len(snippet) > 320:
+            snippet = snippet[:320].rsplit(" ", 1)[0] + "…"
         score = max(0.0, min(1.0, 1.0 - float(c.distance)))
         out.append(
             SearchResult(
@@ -125,6 +135,7 @@ def _to_search_results(chunks: List[RetrievedChunk]) -> List[SearchResult]:
                 distance=c.distance,
                 score=score,
                 snippet=snippet,
+                text=full_text,
                 metadata=meta,
             )
         )
@@ -132,13 +143,68 @@ def _to_search_results(chunks: List[RetrievedChunk]) -> List[SearchResult]:
 
 
 def _extract_summary(answer: str) -> str:
+    """Return a compact preview of the answer for the header banner / session list.
+
+    Strategy:
+    - Strip the trailing "Sources" block (never useful in a preview).
+    - Support the legacy "**Summary:**" header if present.
+    - Otherwise take the answer body up to a reasonable char cap so the banner
+      shows enough context to be useful without overflowing the UI. We stop at
+      a paragraph boundary when we can, and cleanly ellipsize otherwise.
+    """
+    MAX_CHARS = 1500  # keeps the banner readable but shows real substance
+
     text = answer.strip()
-    m = re.search(r"(?is)^\s*(?:\*{0,2}summary\*{0,2}\s*[:\-]\s*)(.+?)(?:\n\s*\n|\Z)", text)
+
+    # Strip trailing "Sources:" section.
+    body = re.split(r"(?im)^\s*\**\s*sources?\s*:?\s*\**\s*$", text, maxsplit=1)[0].strip()
+    if not body:
+        return ""
+
+    # Legacy: honour explicit "Summary:" header if the model still emits one.
+    m = re.search(
+        r"(?is)^\s*(?:\*{0,2}summary\*{0,2}\s*[:\-]\s*)(.+?)(?:\n\s*\n|\Z)",
+        body,
+    )
     if m:
-        return m.group(1).strip()
-    para = text.split("\n\n", 1)[0]
-    lines = [ln.strip() for ln in para.splitlines() if ln.strip()]
-    return " ".join(lines[:4])[:600]
+        return _clean_and_cap(m.group(1), MAX_CHARS)
+
+    return _clean_and_cap(body, MAX_CHARS)
+
+
+def _clean_and_cap(text: str, max_chars: int) -> str:
+    """Collapse markdown bullets / whitespace and trim to max_chars at a nice boundary."""
+    lines = []
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if not ln:
+            lines.append("")  # preserve paragraph breaks
+            continue
+        # Strip leading bullet / list markers so the preview reads as prose.
+        ln = re.sub(r"^[-*•]\s+", "", ln)
+        ln = re.sub(r"^\d+[.)]\s+", "", ln)
+        lines.append(ln)
+
+    # Collapse to a single string: newlines within a paragraph → space,
+    # blank lines → paragraph separator " · ".
+    paragraphs = []
+    buf: list[str] = []
+    for ln in lines:
+        if ln:
+            buf.append(ln)
+        elif buf:
+            paragraphs.append(" ".join(buf))
+            buf = []
+    if buf:
+        paragraphs.append(" ".join(buf))
+
+    joined = " · ".join(paragraphs).strip()
+    if len(joined) <= max_chars:
+        return joined
+
+    # Trim on a word boundary and add an ellipsis.
+    cut = joined[:max_chars].rsplit(" ", 1)[0].rstrip(" ,.;:—-·")
+    return cut + "…"
 
 
 def _extract_upload_text(filename: str, raw: bytes) -> str:
@@ -219,6 +285,52 @@ def _select_relevant_excerpts(
 
 # ---------------- standard chat ----------------
 
+# Cheap heuristic: short messages or ones that lead with a pronoun / follow-up cue
+# almost always depend on the previous turn for their meaning. We use this to
+# decide whether to expand the retrieval query with recent conversation context.
+_FOLLOWUP_CUE_PAT = re.compile(
+    r"^\s*(and|also|but|so|then|what about|how about|why|why\?|how|how\?|"
+    r"tell me more|more|elaborate|explain|expand|continue|go on|really|"
+    r"which|who|whose|whom|when|where|it|its|that|those|these|they|them|"
+    r"this|the same)\b",
+    re.IGNORECASE,
+)
+
+
+def _build_retrieval_query(current: str, history: List[dict]) -> str:
+    """Combine the current user message with recent turns so that follow-up
+    questions ("tell me more", "why?", "which one has approval?") retrieve the
+    same topic as the earlier turn instead of embedding two-word noise.
+
+    We prepend the last user message (always) and the last assistant message
+    (only if the current message looks like a follow-up) to the retrieval
+    query. The raw current message is still what gets sent to the LLM.
+    """
+    if not history:
+        return current
+
+    last_user = next(
+        (m["content"] for m in reversed(history) if m["role"] == "user"),
+        "",
+    )
+    is_followup = bool(_FOLLOWUP_CUE_PAT.match(current)) or len(current.split()) <= 4
+
+    parts: list[str] = []
+    if last_user:
+        parts.append(last_user)
+    if is_followup:
+        last_assistant = next(
+            (m["content"] for m in reversed(history) if m["role"] == "assistant"),
+            "",
+        )
+        if last_assistant:
+            # Trim assistant answer to a lead sentence or two — full answers
+            # are long and dilute the embedding.
+            parts.append(last_assistant[:400])
+    parts.append(current)
+    return "\n".join(parts).strip()
+
+
 @router.post("", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
     if not req.message.strip():
@@ -228,11 +340,17 @@ async def chat(req: ChatRequest) -> ChatResponse:
     store = get_session_store()
     session_id = await store.ensure_session(req.session_id)
 
+    # Pull history up front — needed both for retrieval query expansion and
+    # for the follow-up "let the model use prior context" fallback below.
+    history = await build_history_messages(session_id)
+    has_prior_turn = any(m["role"] == "assistant" for m in history)
+    retrieval_query = _build_retrieval_query(req.message, history) if req.use_rag else req.message
+
     chunks: List[RetrievedChunk] = []
     grounded = False
     if req.use_rag:
         chunks = retrieve(
-            req.message,
+            retrieval_query,
             top_k=req.top_k or s.rag_top_k,
             final_k=s.rag_final_k,
             where=req.filters,
@@ -255,7 +373,11 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
     # Strict RAG: if we searched the KB and found nothing relevant, abstain
     # instead of letting Claude answer from general knowledge.
-    if req.use_rag and not grounded and s.rag_strict:
+    # EXCEPTION: if this session already had a grounded turn, the user is
+    # almost certainly digging into the previous answer ("why?", "elaborate",
+    # "which one?"). Let it through so Claude can respond using the prior
+    # Q&A that's still in its history.
+    if req.use_rag and not grounded and s.rag_strict and not has_prior_turn:
         answer = (
             "I couldn't find any relevant information in the internal knowledge base "
             f"for your question. (Retrieval threshold: distance ≤ {s.rag_distance_threshold:.2f}; "
@@ -277,9 +399,15 @@ async def chat(req: ChatRequest) -> ChatResponse:
         )
 
     context_block = build_context_block(chunks)
+    # If we let a follow-up through without new chunks, tell Claude explicitly
+    # to reuse the prior turn's CONTEXT instead of refusing on empty CONTEXT.
+    is_followup_reuse = (
+        req.use_rag and not grounded and has_prior_turn and s.rag_strict
+    )
+    if is_followup_reuse:
+        context_block = FOLLOWUP_CONTEXT_BLOCK
     user_turn = build_user_turn(req.message, context_block)
 
-    history = await build_history_messages(session_id)
     history.append({"role": "user", "content": user_turn})
 
     # No-Claude fallback
@@ -327,16 +455,60 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
     answer = result["text"].strip()
 
-    fell_back = "not found in the internal knowledge base" in answer.lower()[:200]
+    # Post-response guardrails to catch models that ignore the strict SYSTEM_PROMPT
+    # and answer off-topic questions from pretraining knowledge.
+    #
+    # Under the new response format, a valid grounded answer must end with a
+    # "Sources" section listing at least one dataset title or URL. We accept
+    # either an explicit "Sources:" heading, or the presence of a real URL
+    # from the retrieved chunks appearing in the answer.
+    _SOURCES_HEADER_PAT = re.compile(r"(?im)^\s*\**\s*sources?\s*:?\s*\**\s*$")
+    _URL_PAT = re.compile(r"https?://\S+")
+    refused_by_model = OUT_OF_SCOPE_REFUSAL.lower()[:60] in answer.lower()
+    has_sources_section = bool(_SOURCES_HEADER_PAT.search(answer))
+    answer_urls = {u.rstrip(").,;") for u in _URL_PAT.findall(answer)}
+    chunk_urls = {
+        str((c.metadata or {}).get("url") or "").rstrip("/")
+        for c in chunks
+        if (c.metadata or {}).get("url")
+    }
+    echoes_chunk_url = any(u.rstrip("/") in chunk_urls for u in answer_urls)
+    has_attribution = has_sources_section or echoes_chunk_url
+
+    # Case A: model explicitly refused (matches our canned refusal). Honour it.
+    fell_back = refused_by_model
+    # Case B: model was given fresh context (grounded=True) or is reusing prior
+    # context on a follow-up, but produced no Sources section and no URL from
+    # the retrieved snippets — that violates the response-format rules and
+    # almost always means the model drifted into general knowledge. Force a
+    # refusal.
+    must_cite = grounded or is_followup_reuse
+    drifted = must_cite and not has_attribution and not refused_by_model
+    if drifted:
+        logger.warning(
+            f"Model {result.get('model')} returned an answer with no Sources section "
+            f"(grounded={grounded}, followup={is_followup_reuse}) — overriding "
+            f"with refusal. First 120 chars: {answer[:120]!r}"
+        )
+        answer = OUT_OF_SCOPE_REFUSAL
+        fell_back = True
+
     if grounded and fell_back:
         grounded = False
         citations: List[Citation] = []
-        source_type = "general_knowledge"
-        source_info = {}
+        source_type = "general_knowledge" if not drifted else "none"
+        source_info = {"reason": "model_drift"} if drifted else {}
     elif grounded:
         citations = _to_citations(chunks)
         source_type = "knowledge_base"
         source_info = {"citation_count": len(citations)}
+    elif is_followup_reuse and not fell_back:
+        # Follow-up answered from prior turn's context. We don't have fresh
+        # chunks to attach, but the response is legitimate.
+        citations = []
+        source_type = "knowledge_base"
+        source_info = {"reason": "followup_reuse"}
+        grounded = True
     else:
         citations = []
         source_type = "general_knowledge" if req.use_rag else "none"
