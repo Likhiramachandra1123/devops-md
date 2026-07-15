@@ -1,0 +1,222 @@
+MEDICAL DEVICE AI ASSISTANT TEST PROMPTS & DRILL-DOWN PROMPTS
+
+=================================================================
+USE CASE 1: ENDOSCOPY (AI-Powered Colonoscopy Assistant)
+=================================================================
+
+PRIMARY TEST PROMPT
+
+What colorectal lesions can be detected during a standard white-light colonoscopy, and what are the key characteristics used to differentiate adenomatous polyps from hyperplastic polyps?
+
+DRILL-DOWN PROMPTS
+
+Clinical Understanding
+
+• Explain the Paris Classification used for colorectal lesions.
+• What lesion characteristics are associated with a higher risk of malignancy?
+• Describe the difference between sessile, pedunculated, and flat polyps.
+• Explain the significance of adenoma detection rate (ADR) in colonoscopy.
+• What features indicate an advanced adenoma?
+
+Image Interpretation
+
+• How do adenomatous polyps appear under white-light endoscopy?
+• What visual characteristics suggest a hyperplastic polyp?
+• Explain the role of Narrow Band Imaging (NBI) in lesion characterization.
+• How are serrated lesions differentiated from conventional adenomas?
+• What image artifacts can interfere with lesion detection?
+
+Device Performance
+
+• How is sensitivity measured for an AI-assisted colonoscopy detection system?
+• What FDA-cleared AI devices are available for colorectal lesion detection?
+• What are common causes of false-positive alerts during AI-assisted colonoscopy?
+• How is lesion-level sensitivity calculated?
+• What latency requirements are expected for real-time detection systems?
+
+AI and Model Evaluation
+
+• Explain how AI identifies colorectal polyps in video streams.
+• What training data is required for an AI colonoscopy model?
+• How should model performance be evaluated across multiple sites?
+• What factors contribute to missed lesion detection?
+• How can AI bias impact colorectal lesion detection?
+
+Regulatory
+
+• What FDA product code applies to AI-powered colonoscopy detection software?
+• Summarize the GI Genius 510(k) clearance and intended use.
+• What clinical evidence is typically required for a colonoscopy CADe device submission?
+• What verification and validation testing should be included in a 510(k)?
+• What cybersecurity documentation is expected for AI-powered endoscopy software?
+
+=================================================================
+USE CASE 2: FUNDUS CAMERA (Retinal Imaging Assistant)
+=================================================================
+
+PRIMARY TEST PROMPT
+
+Identify retinal findings associated with diabetic retinopathy and explain how they are visualized using a fundus camera.
+
+DRILL-DOWN PROMPTS
+
+Disease Assessment
+
+• What are the earliest signs of diabetic retinopathy visible on fundus images?
+• Explain the difference between non-proliferative and proliferative diabetic retinopathy.
+• How are microaneurysms detected in retinal images?
+• What retinal findings indicate diabetic macular edema?
+• Describe the progression stages of diabetic retinopathy.
+
+Image Interpretation
+
+• Describe the appearance of cotton wool spots, exudates, and hemorrhages in fundus photographs.
+• How does image quality impact diabetic retinopathy grading?
+• What artifacts commonly occur in fundus imaging?
+• Explain the appearance of neovascularization on fundus images.
+• How are retinal hemorrhages differentiated from microaneurysms?
+
+Clinical Workflow
+
+• How is fundus photography used in routine diabetic retinopathy screening?
+• What image quality requirements are necessary for diagnostic interpretation?
+• When should patients be referred to an ophthalmologist?
+• What is the role of fundus imaging in glaucoma management?
+• How are retinal abnormalities documented and graded?
+
+AI and Performance Evaluation
+
+• What performance metrics are used for AI-based diabetic retinopathy screening systems?
+• How is image-level sensitivity and specificity calculated for a fundus AI model?
+• Explain how AI models are validated across diverse patient populations.
+• What factors contribute to false-positive diabetic retinopathy detection?
+• How should AI performance be compared with retinal specialists?
+
+Regulatory
+
+• List FDA-cleared AI devices for diabetic retinopathy screening.
+• What clinical datasets are commonly used to validate retinal AI algorithms?
+• What evidence is required for FDA submission of an autonomous diabetic retinopathy detection system?
+• What risk controls are needed for AI-based retinal screening solutions?
+• What software documentation is required for regulatory submissions?
+
+=================================================================
+USE CASE 3: OPHTHALMIC B-SCAN ULTRASOUND ASSISTANT
+=================================================================
+
+PRIMARY TEST PROMPT
+
+Explain how ophthalmic B-scan ultrasound is used to evaluate posterior segment pathology when direct visualization of the retina is not possible.
+
+DRILL-DOWN PROMPTS
+
+Clinical Interpretation
+
+• What ultrasound findings are suggestive of retinal detachment?
+• How can retinal detachment be differentiated from posterior vitreous detachment on B-scan imaging?
+• Describe the sonographic appearance of vitreous hemorrhage.
+• Explain the appearance of choroidal detachment on B-scan ultrasound.
+• How are intraocular tumors visualized using ophthalmic ultrasound?
+
+Clinical Workflow
+
+• When should B-scan ultrasound be used in patients with dense cataracts?
+• What are common indications for ophthalmic B-scan imaging?
+• How should measurements of ocular tumors be documented using B-scan ultrasound?
+• What clinical scenarios require emergency B-scan evaluation?
+• How does B-scan assist in pre-operative planning?
+
+Image Interpretation
+
+• Describe the ultrasound characteristics of retinal tears.
+• Explain how vitreous opacities appear on B-scan imaging.
+• What artifacts are commonly observed during ophthalmic ultrasound examinations?
+• How can ocular melanoma be differentiated from benign lesions?
+• What image characteristics indicate retinal traction?
+
+AI and Automation
+
+• Can AI identify retinal detachment from B-scan images? Explain the required training data and validation process.
+• What performance metrics should be monitored for automated retinal detachment detection?
+• What are common causes of AI misclassification in ophthalmic ultrasound imaging?
+• How can an AI model distinguish vitreous hemorrhage from retinal detachment?
+• What dataset diversity is required for robust model training?
+
+Regulatory
+
+• What FDA considerations apply to AI-enabled ophthalmic image analysis software?
+• What verification and validation testing is required for software that analyzes B-scan ultrasound images?
+• Explain the risk management considerations for AI-assisted ophthalmic ultrasound diagnosis.
+• What clinical evidence is expected for FDA submissions?
+• What cybersecurity and software lifecycle documentation should be included?
+
+=================================================================
+CROSS-DEVICE ADVANCED DRILL-DOWN PROMPTS
+=================================================================
+
+Safety & Risk Management
+
+• Identify potential patient safety risks if an AI model fails to detect a lesion.
+• What mitigations should be implemented to reduce false-negative findings?
+• How should manufacturers manage AI-related clinical risks?
+• What post-market surveillance activities should be implemented?
+• How are adverse events reported and monitored?
+
+Clinical Validation
+
+• Design a clinical validation study for an AI-based image analysis system.
+• How would you compare AI performance against physician performance?
+• What statistical methods should be used to demonstrate substantial equivalence?
+• How should multi-center validation studies be structured?
+• What endpoints are appropriate for clinical performance evaluation?
+
+AI/ML Deep Dive
+
+• Explain the training, validation, and test data requirements for an AI medical device.
+• Describe acceptable methods to evaluate model bias and generalizability.
+• How should data annotation quality be assessed?
+• What techniques are used to prevent overfitting in medical imaging models?
+• How should model drift be monitored after deployment?
+
+Regulatory Intelligence
+
+• List FDA-cleared predicate devices relevant to this use case.
+• Provide applicable FDA product codes, regulations, and guidance documents.
+• What documentation is required for a Traditional 510(k)?
+• What software lifecycle processes are expected under IEC 62304?
+• What usability testing is required under FDA Human Factors guidance?
+
+Cybersecurity
+
+• What cybersecurity threats should be considered for AI medical devices?
+• How should software vulnerabilities be identified and managed?
+• What cybersecurity testing should be included in a regulatory submission?
+• What is a Software Bill of Materials (SBOM)?
+• How should connected medical devices handle authentication and data security?
+
+Business and Competitive Intelligence
+
+• Compare currently marketed AI-enabled devices in this clinical area.
+• Identify gaps in existing FDA-cleared solutions.
+• What clinical claims are supported by current evidence?
+• What reimbursement pathways are available for AI-assisted diagnostics?
+• What future innovations are expected in AI-enabled medical imaging?
+
+ROOT-CAUSE / INVESTIGATION PROMPTS
+
+• Why did the AI fail to detect this lesion?
+• What image quality factors contributed to the missed detection?
+• Was the lesion represented in the training dataset?
+• What model threshold settings impacted the prediction?
+• Did patient demographics influence performance?
+• What corrective actions should be implemented?
+• What additional validation testing is required?
+
+EXECUTIVE-LEVEL QUERY PROMPTS
+
+• Summarize the clinical value of this device in one paragraph.
+• List the top 5 clinical benefits of adopting this technology.
+• Identify key regulatory risks prior to FDA submission.
+• Summarize validation evidence supporting clinical effectiveness.
+• Provide a risk-benefit assessment for executive review.
+
